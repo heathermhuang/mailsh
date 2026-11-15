@@ -23,6 +23,7 @@ type fakeMailGPT struct {
 	expired  bool // the next /v1 call answers 401 once
 	scopes   string
 	lastAuth url.Values
+	decided  []string // "confirm:<id>" or "cancel:<id>", in order
 }
 
 func newFake(t *testing.T) *fakeMailGPT {
@@ -82,6 +83,18 @@ func newFake(t *testing.T) *fakeMailGPT {
 		switch {
 		case r.URL.Path == "/v1/me":
 			json.NewEncoder(w).Encode(map[string]any{"email": "sam@example.com", "mode": "full", "timezone": "UTC", "scopes": strings.Fields(f.scopes), "mailboxes": []any{map[string]string{"email": "sam@example.com", "provider": "gmail"}}})
+		case strings.HasPrefix(r.URL.Path, "/v1/pending/") && r.Method == "POST":
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/pending/"), "/")
+			if !strings.Contains(f.scopes, "mail.send") {
+				w.WriteHeader(403)
+				json.NewEncoder(w).Encode(map[string]string{"error": "insufficient_scope", "error_description": "This needs the mail.send permission."})
+				return
+			}
+			f.mu.Lock()
+			f.decided = append(f.decided, parts[1]+":"+parts[0])
+			f.mu.Unlock()
+			msg := map[string]string{"confirm": "Sent to ana@example.com.", "cancel": "Nothing was sent."}[parts[1]]
+			json.NewEncoder(w).Encode(map[string]string{"status": map[string]string{"confirm": "sent", "cancel": "cancelled"}[parts[1]], "message": msg})
 		case r.URL.Path == "/v1/messages" && r.Method == "POST", r.URL.Path == "/v1/events" && r.Method == "POST", r.URL.Path == "/v1/maxine":
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
@@ -89,7 +102,7 @@ func newFake(t *testing.T) *fakeMailGPT {
 			f.posted = append(f.posted, body)
 			f.mu.Unlock()
 			w.WriteHeader(202)
-			json.NewEncoder(w).Encode(map[string]any{"status": "pending_approval", "approval_url": "https://my.example/mailsh/approve?id=x", "new_recipients": []string{"new@x.example"}})
+			json.NewEncoder(w).Encode(map[string]any{"status": "pending_approval", "id": "pend1", "approval_url": "https://my.example/mailsh/approve?id=x", "new_recipients": []string{"new@x.example"}})
 		case r.URL.Path == "/v1/messages":
 			json.NewEncoder(w).Encode(map[string]any{"messages": []any{map[string]any{"id": "m1", "from": "Ana <ana@example.com>", "subject": "Contract", "date": "Tue, 10 Nov 2026 09:00:00 +0000"}}})
 		case r.URL.Path == "/v1/triage":
@@ -180,33 +193,67 @@ func TestRefreshesOnceOn401(t *testing.T) {
 	}
 }
 
-func TestSendOnlyStagesAndShowsTheLink(t *testing.T) {
+func TestSendShowsTheEmailAndConfirmsInTheTerminal(t *testing.T) {
 	f := newFake(t)
+	f.scopes += " mail.send calendar.write"
 	signIn(t, f)
-	var opened []string
-	openBrowser = func(u string) bool { opened = append(opened, u); return true }
+	ttyAnswer := func(a string) { openTTY = func() io.Reader { return strings.NewReader(a) } }
+	defer func() { openTTY = func() io.Reader { return nil } }()
+
+	// y at the prompt: shown, then confirmed once.
+	ttyAnswer("y\n")
 	var out bytes.Buffer
-	err := run([]string{"send", "--to", "ana@example.com, new@x.example", "--subject", "Hi"}, strings.NewReader("Body from stdin\n"), &out)
-	if err != nil {
+	if err := run([]string{"send", "--to", "ana@example.com, new@x.example", "--subject", "Hi"}, strings.NewReader("Body from stdin\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Nothing is sent yet") || !strings.Contains(out.String(), "https://my.example/mailsh/approve?id=x") || !strings.Contains(out.String(), "new@x.example") {
-		t.Fatalf("send output: %s", out.String())
+	for _, want := range []string{"To: ana@example.com, new@x.example", "Subject: Hi", "Body from stdin", "Never written to before: new@x.example", "Send? [y/N]", "Sent to ana@example.com."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
 	}
-	if len(opened) != 1 {
-		t.Fatalf("opened %v", opened)
-	}
-	got := f.posted[0]
-	if got["body"] != "Body from stdin\n" || len(got["to"].([]any)) != 2 || got["subject"] != "Hi" {
+	if got := f.posted[0]; got["body"] != "Body from stdin\n" || len(got["to"].([]any)) != 2 {
 		t.Fatalf("posted %v", got)
 	}
-	// --no-browser shows the link without opening it.
-	opened = nil
-	if _, err := runOut(t, "--no-browser", "cal", "add", "--title", "Lunch", "--start", "2026-11-20T12:00", "--end", "2026-11-20T13:00"); err != nil {
-		t.Fatal(err)
+	if strings.Join(f.decided, ",") != "confirm:pend1" {
+		t.Fatalf("decided %v", f.decided)
 	}
-	if len(opened) != 0 || f.posted[1]["title"] != "Lunch" {
-		t.Fatalf("cal add: opened %v posted %v", opened, f.posted[1])
+
+	// Anything but y cancels it.
+	ttyAnswer("\n")
+	out2, err := runOut(t, "send", "--to", "ana@example.com", "--subject", "x", "--body", "y")
+	if err != nil || !strings.Contains(out2, "Cancelled") || f.decided[len(f.decided)-1] != "cancel:pend1" {
+		t.Fatalf("no: %v %q %v", err, out2, f.decided)
+	}
+
+	// No terminal (a script, an agent): it prints the confirm command and decides nothing.
+	openTTY = func() io.Reader { return nil }
+	n := len(f.decided)
+	out3, err := runOut(t, "send", "--to", "ana@example.com", "--subject", "x", "--body", "y")
+	if err != nil || !strings.Contains(out3, "mail.sh confirm pend1") || len(f.decided) != n {
+		t.Fatalf("no tty: %v %q %v", err, out3, f.decided)
+	}
+	// ...and the confirm command finishes it.
+	out4, err := runOut(t, "confirm", "pend1")
+	if err != nil || !strings.Contains(out4, "Sent to") || f.decided[len(f.decided)-1] != "confirm:pend1" {
+		t.Fatalf("confirm: %v %q", err, out4)
+	}
+
+	// --yes confirms without asking; cal add shows the event and goes the same way.
+	out5, err := runOut(t, "--yes", "cal", "add", "--title", "Lunch", "--start", "2026-11-20T12:00", "--end", "2026-11-20T13:00")
+	if err != nil || !strings.Contains(out5, "Lunch") || !strings.Contains(out5, "No one is invited.") || strings.Contains(out5, "[y/N]") {
+		t.Fatalf("cal add --yes: %v %q", err, out5)
+	}
+	if f.posted[len(f.posted)-1]["title"] != "Lunch" || f.decided[len(f.decided)-1] != "confirm:pend1" {
+		t.Fatalf("cal add: %v %v", f.posted, f.decided)
+	}
+}
+
+func TestMissingPermissionSaysWhatToTick(t *testing.T) {
+	f := newFake(t)
+	signIn(t, f)
+	_, err := runOut(t, "confirm", "pend1")
+	if err == nil || !strings.Contains(err.Error(), `tick "Send email as you"`) {
+		t.Fatalf("err %v", err)
 	}
 }
 

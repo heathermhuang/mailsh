@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,13 @@ func (c *client) send(method, path string, query url.Values, body any, out any) 
 		if res.StatusCode == 404 && e.Description == "Not found." {
 			e.Description = "mail.sh is not open for this MailGPT account yet."
 		}
+		if e.Code == "insufficient_scope" {
+			for scope, box := range scopeBoxes {
+				if strings.Contains(e.Description, scope) {
+					e.Description = fmt.Sprintf("mail.sh isn't allowed to %s. Run `mail.sh auth` again and tick \"%s\".", box[0], box[1])
+				}
+			}
+		}
 		return res.StatusCode, e
 	}
 	if out != nil {
@@ -95,4 +103,13 @@ func (c *client) send(method, path string, query url.Values, body any, out any) 
 		}
 	}
 	return res.StatusCode, nil
+}
+
+// scopeBoxes: what each permission does, and its box on MailGPT's consent page.
+var scopeBoxes = map[string][2]string{
+	"mail.send":      {"send email", "Send email as you"},
+	"calendar.write": {"add calendar events", "Add events to your calendar"},
+	"mail.read":      {"read your email", "Search and read your email"},
+	"calendar.read":  {"see your calendar", "See your calendar"},
+	"maxine.chat":    {"talk to Maxine", "Talk to Maxine for you"},
 }

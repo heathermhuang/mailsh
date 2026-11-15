@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -36,14 +37,17 @@ const usage = `mail.sh: your email and calendar from the terminal, through MailG
   mail.sh owe                                what you owe, and are owed
   mail.sh ask "..."                          ask Maxine (she only reads here)
   mail.sh maxine on                          turn Maxine on for a mail.sh-only account
+  mail.sh confirm <id> | cancel <id>         send/add, or drop, something staged
 
-Every command takes --json. Sending, adding an event and turning Maxine on wait for your tap on
-a MailGPT page, signed in, before anything happens. MAILSH_API sets the server (default ` + defaultAPI + `).
+Every command takes --json. send and cal add show you the email or event and ask before anything
+happens; --yes confirms without asking. Turning Maxine on is approved on a MailGPT page, signed in.
+MAILSH_API sets the server (default ` + defaultAPI + `).
 `
 
 type options struct {
 	json      bool
 	noBrowser bool
+	yes       bool
 	api       string
 	out       io.Writer
 	in        io.Reader
@@ -66,6 +70,8 @@ func run(args []string, in io.Reader, out io.Writer) error {
 			o.json = true
 		case "--no-browser":
 			o.noBrowser = true
+		case "--yes", "-y":
+			o.yes = true
 		default:
 			rest = append(rest, a)
 		}
@@ -112,6 +118,11 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return cmdOwe(o, c, args)
 	case "ask":
 		return cmdAsk(o, c, args)
+	case "confirm", "cancel":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: mail.sh %s <id>", cmd)
+		}
+		return decide(o, c, args[0], cmd)
 	case "maxine":
 		if len(args) != 1 || args[0] != "on" {
 			return errors.New("usage: mail.sh maxine on")
@@ -325,11 +336,93 @@ func cmdSend(o *options, c *client, args []string) error {
 	if *replyTo != "" {
 		req["in_reply_to"] = *replyTo
 	}
-	raw, err := get(o, c, "/v1/messages", nil, "POST", req)
-	if raw == nil {
+	var b strings.Builder
+	fmt.Fprintf(&b, "To: %s\n", strings.Join(splitList(*to), ", "))
+	if *cc != "" {
+		fmt.Fprintf(&b, "Cc: %s\n", strings.Join(splitList(*cc), ", "))
+	}
+	fmt.Fprintf(&b, "Subject: %s\n\n%s", *subject, text)
+	return stageAndConfirm(o, c, "/v1/messages", req, b.String(), "Send")
+}
+
+// openTTY is the terminal to ask on, or nil when there is none (a script or an agent): a variable so the tests can answer.
+var openTTY = func() io.Reader {
+	f, err := os.Open("/dev/tty")
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// stageAndConfirm stages a send or an event, shows it, and confirms it: with --yes at once, else on a y typed at the terminal. With no terminal
+// it prints the command that confirms it, so an agent or a script decides in a second step.
+func stageAndConfirm(o *options, c *client, path string, req any, shown, verb string) error {
+	var staged struct {
+		ID            string   `json:"id"`
+		NewRecipients []string `json:"new_recipients"`
+	}
+	var raw json.RawMessage
+	if _, err := c.do("POST", path, nil, req, &raw); err != nil {
 		return err
 	}
-	return waitForTap(o, raw, "Nothing is sent yet.")
+	if err := json.Unmarshal(raw, &staged); err != nil || staged.ID == "" {
+		return fmt.Errorf("MailGPT's answer could not be read")
+	}
+	if o.json && !o.yes {
+		fmt.Fprintln(o.out, string(raw))
+		return nil
+	}
+	if !o.json {
+		fmt.Fprintf(o.out, "%s\n", strings.TrimRight(shown, "\n"))
+		if len(staged.NewRecipients) > 0 {
+			fmt.Fprintf(o.out, "\nNever written to before: %s\n", strings.Join(staged.NewRecipients, ", "))
+		}
+	}
+	if !o.yes {
+		tty := openTTY()
+		if tty == nil {
+			fmt.Fprintf(o.out, "\nNothing happens until it is confirmed: mail.sh confirm %s   (or: mail.sh cancel %s; it expires in 24 hours)\n", staged.ID, staged.ID)
+			return nil
+		}
+		fmt.Fprintf(o.out, "\n%s? [y/N] ", verb)
+		answer, _ := bufio.NewReader(tty).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+			_ = decideQuiet(c, staged.ID, "cancel")
+			fmt.Fprintln(o.out, "Cancelled. Nothing was sent or added.")
+			return nil
+		}
+	}
+	return decide(o, c, staged.ID, "confirm")
+}
+
+// decide confirms or cancels one staged request and says what happened.
+func decide(o *options, c *client, id, action string) error {
+	var r struct {
+		Status   string `json:"status"`
+		Message  string `json:"message"`
+		AllowURL string `json:"allow_url"`
+	}
+	var raw json.RawMessage
+	if _, err := c.do("POST", "/v1/pending/"+url.PathEscape(id)+"/"+action, nil, nil, &raw); err != nil {
+		return err
+	}
+	if o.json {
+		fmt.Fprintln(o.out, string(raw))
+		return nil
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return err
+	}
+	fmt.Fprintln(o.out, r.Message)
+	if r.AllowURL != "" {
+		fmt.Fprintf(o.out, "Allow calendar access: %s\n", r.AllowURL)
+	}
+	return nil
+}
+
+func decideQuiet(c *client, id, action string) error {
+	_, err := c.do("POST", "/v1/pending/"+url.PathEscape(id)+"/"+action, nil, nil, nil)
+	return err
 }
 
 // waitForTap shows the approval link a write answers with, and opens it in the browser.
@@ -435,11 +528,11 @@ func cmdCal(o *options, c *client, args []string) error {
 		if *description != "" {
 			req["description"] = *description
 		}
-		raw, err := get(o, c, "/v1/events", nil, "POST", req)
-		if raw == nil {
-			return err
+		shown := fmt.Sprintf("%s\nWhen: %s to %s (your timezone)", *title, strings.Replace(*start, "T", " ", 1), strings.Replace(*end, "T", " ", 1))
+		if *location != "" {
+			shown += "\nWhere: " + *location
 		}
-		return waitForTap(o, raw, "Nothing is added yet.")
+		return stageAndConfirm(o, c, "/v1/events", req, shown+"\nNo one is invited.", "Add")
 	}
 	return fmt.Errorf("unknown cal command %q", args[0])
 }
@@ -622,7 +715,7 @@ func parseTime(s string) (time.Time, bool) {
 
 func shortDate(s string) string {
 	if t, ok := parseTime(s); ok {
-		return t.Format("Mon 2 Jan 15:04")
+		return t.Local().Format("Mon 2 Jan 15:04")
 	}
 	return clip(s, 16)
 }
@@ -636,7 +729,7 @@ func shortDay(s string) string {
 
 func clockOf(s string) string {
 	if t, ok := parseTime(s); ok {
-		return t.Format("15:04")
+		return t.Local().Format("15:04")
 	}
 	return s
 }

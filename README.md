@@ -29,17 +29,20 @@ mail.sh waiting                            emails she is waiting for
 mail.sh owe                                what you owe, and are owed
 mail.sh ask "did Ana send the contract?"   ask Maxine (she only reads here)
 mail.sh maxine on                          turn Maxine on for a mail.sh-only account
+mail.sh confirm <id> | cancel <id>         send/add, or drop, something staged
 ```
 
 Every command takes `--json` for scripts and agents.
 
-## Nothing is sent without you
+## Nothing is sent without a confirm
 
-`send`, `cal add` and `maxine on` only ask. Each prints a link to a MailGPT page where you,
-signed in, read exactly what will happen and tap to approve it. Nothing the CLI or an agent sends
-can skip that page: an agent reading your email can be tricked by what it reads, so the server,
-not the client, decides. Sending and adding events are also separate permissions you tick when you
-sign in, and both have daily limits.
+`send` and `cal add` show you the whole email or event first and ask `Send? [y/N]` (or `Add?`); only a
+`y` sends or adds it. `--yes` confirms without asking, for your own scripts. With no terminal attached,
+as when an agent runs it, they print `mail.sh confirm <id>` and wait: nothing happens until something
+confirms it (it expires in 24 hours; `mail.sh cancel <id>` drops it). So give mail.sh's send and
+calendar permissions only to agents you trust with them. Sending and adding events are separate
+permissions you tick when you sign in, and both have daily limits. `mail.sh maxine on` is approved on
+a MailGPT page, signed in.
 
 ## Accounts
 
