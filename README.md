@@ -40,7 +40,9 @@ Every command takes `--json` for scripts and agents.
 `y` sends or adds it. `--yes` confirms without asking, for your own scripts. With no terminal attached,
 as when an agent runs it, they print `mail.sh confirm <id>` and wait: nothing happens until something
 confirms it (it expires in 24 hours; `mail.sh cancel <id>` drops it). So give mail.sh's send and
-calendar permissions only to agents you trust with them. Sending and adding events are separate
+calendar permissions only to agents you trust with them. An email to someone you have never written to
+never confirms in the terminal: mail.sh shows its approval link, and it is sent only from that MailGPT
+page, signed in (`--yes` does not skip it). Sending and adding events are separate
 permissions you tick when you sign in, and both have daily limits. `mail.sh maxine on` is approved on
 a MailGPT page, signed in.
 

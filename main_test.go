@@ -102,7 +102,20 @@ func newFake(t *testing.T) *fakeMailGPT {
 			f.posted = append(f.posted, body)
 			f.mu.Unlock()
 			w.WriteHeader(202)
-			json.NewEncoder(w).Encode(map[string]any{"status": "pending_approval", "id": "pend1", "approval_url": "https://my.example/mailsh/approve?id=x", "new_recipients": []string{"new@x.example"}})
+			// As MailGPT answers: an address containing "new@" is one the mailbox never wrote to, and then there is no confirm route.
+			fresh := []string{}
+			if to, ok := body["to"].([]any); ok {
+				for _, a := range to {
+					if strings.Contains(a.(string), "new@") {
+						fresh = append(fresh, a.(string))
+					}
+				}
+			}
+			staged := map[string]any{"status": "pending_approval", "id": "pend1", "approval_url": "https://my.example/mailsh/approve?id=x", "new_recipients": fresh}
+			if len(fresh) == 0 && r.URL.Path != "/v1/maxine" {
+				staged["confirm"] = "POST /v1/pending/pend1/confirm"
+			}
+			json.NewEncoder(w).Encode(staged)
 		case r.URL.Path == "/v1/messages":
 			json.NewEncoder(w).Encode(map[string]any{"messages": []any{map[string]any{"id": "m1", "from": "Ana <ana@example.com>", "subject": "Contract", "date": "Tue, 10 Nov 2026 09:00:00 +0000"}}})
 		case r.URL.Path == "/v1/triage":
@@ -203,10 +216,10 @@ func TestSendShowsTheEmailAndConfirmsInTheTerminal(t *testing.T) {
 	// y at the prompt: shown, then confirmed once.
 	ttyAnswer("y\n")
 	var out bytes.Buffer
-	if err := run([]string{"send", "--to", "ana@example.com, new@x.example", "--subject", "Hi"}, strings.NewReader("Body from stdin\n"), &out); err != nil {
+	if err := run([]string{"send", "--to", "ana@example.com, bo@example.com", "--subject", "Hi"}, strings.NewReader("Body from stdin\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"To: ana@example.com, new@x.example", "Subject: Hi", "Body from stdin", "Never written to before: new@x.example", "Send? [y/N]", "Sent to ana@example.com."} {
+	for _, want := range []string{"To: ana@example.com, bo@example.com", "Subject: Hi", "Body from stdin", "Send? [y/N]", "Sent to ana@example.com."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q in:\n%s", want, out.String())
 		}
@@ -245,6 +258,32 @@ func TestSendShowsTheEmailAndConfirmsInTheTerminal(t *testing.T) {
 	}
 	if f.posted[len(f.posted)-1]["title"] != "Lunch" || f.decided[len(f.decided)-1] != "confirm:pend1" {
 		t.Fatalf("cal add: %v %v", f.posted, f.decided)
+	}
+}
+
+// An email to someone the mailbox never wrote to has no confirm route: mail.sh shows the approval link instead of asking, even with --yes.
+func TestSendToSomeoneNewWaitsForTheTap(t *testing.T) {
+	f := newFake(t)
+	f.scopes += " mail.send"
+	signIn(t, f)
+	openTTY = func() io.Reader { return strings.NewReader("y\n") }
+	defer func() { openTTY = func() io.Reader { return nil } }()
+	for _, args := range [][]string{
+		{"send", "--to", "ana@example.com, new@x.example", "--subject", "Hi", "--body", "x"},
+		{"--yes", "send", "--to", "new@x.example", "--subject", "Hi", "--body", "x"},
+	} {
+		out, err := runOut(t, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Subject: Hi", "never written to", "https://my.example/mailsh/approve?id=x", "Never written to before: new@x.example"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("%v: missing %q in:\n%s", args, want, out)
+			}
+		}
+		if strings.Contains(out, "[y/N]") || len(f.decided) != 0 {
+			t.Fatalf("%v: asked or decided: %q %v", args, out, f.decided)
+		}
 	}
 }
 
