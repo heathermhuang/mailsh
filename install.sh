@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install mail.sh: curl -fsSL https://raw.githubusercontent.com/heathermhuang/mailsh/main/install.sh | sh
+# Install mail.sh: curl -fsSL https://mail.sh/install | sh
 set -eu
 repo="heathermhuang/mailsh"
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"

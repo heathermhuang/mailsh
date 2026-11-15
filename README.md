@@ -4,7 +4,7 @@ Your email and calendar from the terminal, for you and for your agents. Gmail an
 MailGPT's verified sign-in: no Google Cloud project, no API keys, no client JSON.
 
 ```sh
-brew install heathermhuang/mailsh/mailsh
+curl -fsSL https://mail.sh/install | sh     # or: brew install heathermhuang/mailsh/mailsh
 mail.sh auth
 mail.sh list -q "is:unread"
 ```
