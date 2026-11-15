@@ -355,11 +355,13 @@ var openTTY = func() io.Reader {
 }
 
 // stageAndConfirm stages a send or an event, shows it, and confirms it: with --yes at once, else on a y typed at the terminal. With no terminal
-// it prints the command that confirms it, so an agent or a script decides in a second step.
+// it prints the command that confirms it, so an agent or a script decides in a second step. An email to someone the mailbox never wrote to
+// comes back with no confirm route: it is sent only from its approval page, signed in, so mail.sh shows that link instead.
 func stageAndConfirm(o *options, c *client, path string, req any, shown, verb string) error {
 	var staged struct {
 		ID            string   `json:"id"`
 		NewRecipients []string `json:"new_recipients"`
+		Confirm       string   `json:"confirm"`
 	}
 	var raw json.RawMessage
 	if _, err := c.do("POST", path, nil, req, &raw); err != nil {
@@ -368,9 +370,13 @@ func stageAndConfirm(o *options, c *client, path string, req any, shown, verb st
 	if err := json.Unmarshal(raw, &staged); err != nil || staged.ID == "" {
 		return fmt.Errorf("MailGPT's answer could not be read")
 	}
-	if o.json && !o.yes {
+	if o.json && (!o.yes || staged.Confirm == "") {
 		fmt.Fprintln(o.out, string(raw))
 		return nil
+	}
+	if staged.Confirm == "" {
+		fmt.Fprintf(o.out, "%s\n\n", strings.TrimRight(shown, "\n"))
+		return waitForTap(o, raw, "Not sent yet: it goes to someone you have never written to, so it is sent only from MailGPT.")
 	}
 	if !o.json {
 		fmt.Fprintf(o.out, "%s\n", strings.TrimRight(shown, "\n"))
