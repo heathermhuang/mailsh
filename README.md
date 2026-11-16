@@ -1,7 +1,7 @@
 # mail.sh
 
-Your email and calendar from the terminal, for you and for your agents. Gmail and Outlook, through
-MailGPT's verified sign-in: no Google Cloud project, no API keys, no client JSON.
+Your email and calendar from the terminal, for you and for your agents. Gmail and Outlook, powered by
+MailGPT: no Google Cloud project, no API keys, no client JSON.
 
 ```sh
 curl -fsSL https://mail.sh/install | sh     # or: brew install heathermhuang/mailsh/mailsh
@@ -58,8 +58,8 @@ Telegram, WhatsApp or Slack. An existing MailGPT account already has her.
 `mail.sh auth` registers this CLI with MailGPT and signs in with OAuth (PKCE, a 127.0.0.1
 redirect). On a machine with no browser, `--no-browser` prints the link and takes back the address
 the browser lands on. Tokens are kept in the macOS keychain, elsewhere in
-`~/.config/mailsh/credentials.json` (mode 0600). Access tokens last an hour and a connection 30
-days; end it any time in MailGPT Settings → Connected AI apps.
+`~/.config/mailsh/credentials.json` (mode 0600). Access tokens last an hour and renew themselves; the
+connection has no end date. End it any time in MailGPT Settings → Connected AI apps.
 
 ## Build
 

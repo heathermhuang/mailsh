@@ -231,7 +231,8 @@ func login(api string, noBrowser bool, in io.Reader, out io.Writer) (*Credential
 	return c, nil
 }
 
-// refresh swaps the refresh token for a new access token. A connection lasts at most 30 days, then `mail.sh auth` again.
+// refresh swaps the refresh token for a new access token and keeps the rotated refresh token. A connection has no end date;
+// `mail.sh auth` again only after it was disconnected or the person signed out of MailGPT.
 func refresh(c *Credentials) error {
 	if c.RefreshToken == "" {
 		return errors.New("signed out: run `mail.sh auth`")
