@@ -1,7 +1,7 @@
 # mail.sh
 
-Your email and calendar from the terminal, for you and for your agents. Gmail and Outlook, through
-MailGPT's verified sign-in: no Google Cloud project, no API keys, no client JSON.
+Your email and calendar from the terminal, for you and for your agents. Gmail and Outlook, powered by
+MailGPT: no Google Cloud project, no API keys, no client JSON.
 
 ```sh
 curl -fsSL https://mail.sh/install | sh     # or: brew install heathermhuang/mailsh/mailsh
