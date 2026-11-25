@@ -67,9 +67,30 @@ func fetchMetadata(api string) (*serverMetadata, error) {
 	return &m, nil
 }
 
+// clientName names this computer, so MailGPT's Connections tab can tell two computers' mail.sh apart ("mail.sh on heathers-mbp").
+// Only the name the computer calls itself; with none, plain "mail.sh".
+func clientName() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "mail.sh"
+	}
+	return clientNameFor(h)
+}
+
+func clientNameFor(host string) string {
+	h := strings.TrimSuffix(strings.TrimSpace(host), ".local")
+	if h == "" {
+		return "mail.sh"
+	}
+	if r := []rune(h); len(r) > 60 {
+		h = string(r[:60])
+	}
+	return "mail.sh on " + h
+}
+
 func registerClient(m *serverMetadata, redirectURI string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"client_name":                "mail.sh",
+		"client_name":                clientName(),
 		"redirect_uris":              []string{redirectURI},
 		"token_endpoint_auth_method": "none",
 		"grant_types":                []string{"authorization_code", "refresh_token"},

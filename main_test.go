@@ -375,3 +375,17 @@ func flagSetFor() *flag.FlagSet {
 	fs.Int("n", 1, "")
 	return fs
 }
+
+func TestClientNameNamesTheComputer(t *testing.T) {
+	cases := map[string]string{
+		"heathers-mbp.local":    "mail.sh on heathers-mbp",
+		"  build-01 ":           "mail.sh on build-01",
+		"":                      "mail.sh",
+		strings.Repeat("a", 70): "mail.sh on " + strings.Repeat("a", 60),
+	}
+	for in, want := range cases {
+		if got := clientNameFor(in); got != want {
+			t.Errorf("clientNameFor(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
